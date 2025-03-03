@@ -43,14 +43,9 @@ def check_password():
 
 def load_and_clean_data(sheet_id='1VJ0JaagpbXXKZrgiMRcvtoebo89ZgM2kdjcSEBhrANA'):
     try:
-        # Debug: Afficher les secrets disponibles
-        st.write("Vérification des secrets...")
-        if "gcp" not in st.secrets:
-            st.error("La section 'gcp' n'est pas trouvée dans les secrets")
-            return pd.DataFrame()
-            
-        if "service_account" not in st.secrets["gcp"]:
-            st.error("'service_account' n'est pas trouvé dans les secrets gcp")
+        # Vérifier les secrets silencieusement
+        if "gcp" not in st.secrets or "service_account" not in st.secrets["gcp"]:
+            st.error("Configuration des secrets manquante")
             return pd.DataFrame()
             
         # Récupérer et vérifier les credentials
@@ -60,27 +55,22 @@ def load_and_clean_data(sheet_id='1VJ0JaagpbXXKZrgiMRcvtoebo89ZgM2kdjcSEBhrANA')
         if isinstance(credentials_dict, str):
             try:
                 credentials_dict = json.loads(credentials_dict)
-                st.write("Conversion de la chaîne en dictionnaire réussie")
             except json.JSONDecodeError as e:
                 st.error(f"Erreur lors du décodage JSON: {str(e)}")
                 return pd.DataFrame()
         
-        st.write("Création des credentials...")
+        # Créer les credentials et se connecter
         credentials = ServiceAccountCredentials.from_json_keyfile_dict(
             credentials_dict,
             ['https://spreadsheets.google.com/feeds',
              'https://www.googleapis.com/auth/drive']
         )
         
-        st.write("Connexion à Google Sheets...")
         client = gspread.authorize(credentials)
-        
-        st.write("Ouverture du fichier...")
         spreadsheet = client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet('Cleaned')
         
-        st.write("Lecture des données...")
-        # Au lieu de get_all_records(), utilisons get_all_values()
+        # Lire les données
         all_values = worksheet.get_all_values()
         headers = all_values[0]
         
@@ -98,13 +88,10 @@ def load_and_clean_data(sheet_id='1VJ0JaagpbXXKZrgiMRcvtoebo89ZgM2kdjcSEBhrANA')
         # Créer le DataFrame avec les en-têtes uniques
         df = pd.DataFrame(all_values[1:], columns=unique_headers)
         
-        st.write(f"Données chargées avec succès: {len(df)} lignes")
         return df
         
     except Exception as e:
         st.error(f"Erreur lors du chargement des données : {str(e)}")
-        st.error(f"Type d'erreur : {type(e).__name__}")
-        st.error(f"Détails complets : {traceback.format_exc()}")
         return pd.DataFrame()
 
 def calculate_engagement_kpis(df):
