@@ -55,7 +55,6 @@ def load_and_clean_data(sheet_id='1VJ0JaagpbXXKZrgiMRcvtoebo89ZgM2kdjcSEBhrANA')
             
         # Récupérer et vérifier les credentials
         credentials_dict = st.secrets["gcp"]["service_account"]
-        st.write("Type de credentials:", type(credentials_dict))
         
         # Si c'est une chaîne, la convertir en dictionnaire
         if isinstance(credentials_dict, str):
@@ -66,13 +65,6 @@ def load_and_clean_data(sheet_id='1VJ0JaagpbXXKZrgiMRcvtoebo89ZgM2kdjcSEBhrANA')
                 st.error(f"Erreur lors du décodage JSON: {str(e)}")
                 return pd.DataFrame()
         
-        # Vérifier les clés requises
-        required_keys = ["type", "project_id", "private_key_id", "private_key", "client_email"]
-        missing_keys = [key for key in required_keys if key not in credentials_dict]
-        if missing_keys:
-            st.error(f"Clés manquantes dans les credentials: {missing_keys}")
-            return pd.DataFrame()
-            
         st.write("Création des credentials...")
         credentials = ServiceAccountCredentials.from_json_keyfile_dict(
             credentials_dict,
@@ -88,8 +80,23 @@ def load_and_clean_data(sheet_id='1VJ0JaagpbXXKZrgiMRcvtoebo89ZgM2kdjcSEBhrANA')
         worksheet = spreadsheet.worksheet('Cleaned')
         
         st.write("Lecture des données...")
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
+        # Au lieu de get_all_records(), utilisons get_all_values()
+        all_values = worksheet.get_all_values()
+        headers = all_values[0]
+        
+        # Créer des en-têtes uniques
+        unique_headers = []
+        seen = {}
+        for h in headers:
+            if h in seen:
+                seen[h] += 1
+                unique_headers.append(f"{h}_{seen[h]}")
+            else:
+                seen[h] = 0
+                unique_headers.append(h)
+        
+        # Créer le DataFrame avec les en-têtes uniques
+        df = pd.DataFrame(all_values[1:], columns=unique_headers)
         
         st.write(f"Données chargées avec succès: {len(df)} lignes")
         return df
