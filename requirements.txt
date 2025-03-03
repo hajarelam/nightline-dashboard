@@ -1,0 +1,8 @@
+streamlit
+pandas
+plotly
+gspread
+oauth2client
+numpy
+matplotlib
+seaborn
