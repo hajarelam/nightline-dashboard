@@ -15,6 +15,8 @@ import traceback
 import json
 from io import BytesIO
 import xlsxwriter
+import wordcloud
+from wordcloud import WordCloud
 
 def check_password():
     # Temporairement retourner True pour désactiver l'authentification
@@ -494,70 +496,114 @@ def analyze_demographics(df):
     }
 
 def analyze_nl_awareness_sources(df):
-    # Trouver la colonne des sources
     source_col = find_closest_column(df, "Comment as-tu entendu")
+    if not source_col:
+        return None, None
+
+    # Séparer les réponses multiples
+    sources = df[source_col].str.split(',').explode().str.strip()
     
-    if source_col:
-        # Grouper les sources en catégories plus larges
-        source_mapping = {
-            'Réseaux sociaux': ['Instagram', 'Facebook', 'Twitter', 'LinkedIn', 'TikTok', 'Snapchat'],
-            'Site web': ['Site internet', 'Google', 'Recherche web'],
-            'Institution': ['École', 'Université', 'Administration', 'CROUS', 'Service de santé universitaire'],
-            'Bouche à oreille': ['Ami·e·s', 'Famille', 'Camarades'],
-            'Professionnels': ['Psychologue', 'Médecin', 'Thérapeute', 'Infirmier·e'],
-            'Communication physique': ['Affiches', 'Flyers', 'Événement', 'Stand'],
-            'Autres': ['Autre']
-        }
+    def categorize_source(source):
+        if pd.isna(source):
+            return "Non spécifié", "Non spécifié"
+            
+        source = source.lower()
         
-        # Nettoyer et catégoriser les données
-        sources = df[source_col].str.split(',').explode().str.strip()
-        
-        # Mapper les sources aux catégories
-        categorized_sources = []
-        for source in sources:
-            if pd.notna(source):
-                found = False
-                for category, keywords in source_mapping.items():
-                    if any(keyword.lower() in source.lower() for keyword in keywords):
-                        categorized_sources.append(category)
-                        found = True
-                        break
-                if not found:
-                    categorized_sources.append('Autres')
-        
-        # Créer le DataFrame des sources catégorisées
-        source_counts = pd.Series(categorized_sources).value_counts()
-        source_percentages = (source_counts / len(df)) * 100
-        
-        # Créer la visualisation
-        fig = go.Figure()
-        
-        # Ajouter le graphique en barres
-        fig.add_trace(go.Bar(
-            x=source_percentages.values,
-            y=source_percentages.index,
+        # Catégories principales
+        if any(term in source for term in ["instagram", "facebook", "twitter", "linkedin", "tiktok"]):
+            return "Réseaux sociaux", source.title()
+        elif any(term in source for term in ["université", "école", "fac", "campus"]):
+            return "Université/École", source.title()
+        elif any(term in source for term in ["psy", "médecin", "santé", "thérapeute"]):
+            return "Professionnel de santé", source.title()
+        elif any(term in source for term in ["ami", "proche", "famille"]):
+            return "Ami/Proche", source.title()
+        elif any(term in source for term in ["affiche", "flyer", "poster"]):
+            return "Communication physique", source.title()
+        elif any(term in source for term in ["internet", "site", "web"]):
+            return "Site internet", source.title()
+        else:
+            # Nettoyer et standardiser le texte pour la catégorie "Autres"
+            cleaned_source = source.strip().capitalize()
+            return "Autres", cleaned_source
+    
+    # Appliquer la catégorisation
+    categorized = sources.apply(lambda x: categorize_source(x))
+    main_categories = categorized.apply(lambda x: x[0])
+    detailed_categories = categorized.apply(lambda x: x[1])
+    
+    # Calculer les pourcentages
+    total_respondents = len(df)
+    main_counts = main_categories.value_counts()
+    main_percentages = (main_counts / total_respondents * 100).round(1)
+    
+    # Créer le graphique principal
+    fig_main = go.Figure()
+    fig_main.add_trace(go.Bar(
+        y=main_percentages.index,
+        x=main_percentages.values,
+        orientation='h',
+        marker_color='#4ecdc4',
+        text=[f'{x:.1f}%' for x in main_percentages.values],
+        textposition='outside'
+    ))
+    
+    fig_main.update_layout(
+        title="Sources d'information",
+        xaxis_title="Pourcentage des appelants",
+        yaxis_title=None,
+        height=400
+    )
+    
+    # Analyser le détail de la catégorie "Autres"
+    others_detail = detailed_categories[main_categories == "Autres"].value_counts()
+    others_percentages = (others_detail / total_respondents * 100).round(1)
+    
+    if len(others_percentages) > 0:
+        # Créer le graphique détaillé pour "Autres"
+        fig_others = go.Figure()
+        fig_others.add_trace(go.Bar(
+            y=others_percentages.index,
+            x=others_percentages.values,
             orientation='h',
-            marker_color='#4ecdc4',
-            text=[f'{x:.1f}%' for x in source_percentages.values],
-            textposition='auto',
+            marker_color='#ff6b6b',
+            text=[f'{x:.1f}%' for x in others_percentages.values],
+            textposition='outside'
         ))
         
-        # Mise en page
-        fig.update_layout(
-            title="Comment les appelants ont découvert Nightline",
+        fig_others.update_layout(
+            title="Détail des autres sources d'information",
             xaxis_title="Pourcentage des appelants",
-            yaxis_title="Source",
-            template='plotly_dark',
-            plot_bgcolor='#1e1e1e',
-            paper_bgcolor='#1e1e1e',
-            height=400,
-            margin=dict(l=20, r=20, t=40, b=20),
-            showlegend=False
+            yaxis_title=None,
+            height=max(400, len(others_percentages) * 25),
+            margin=dict(l=200, r=20, t=40, b=20)
         )
         
-        return fig, source_percentages
+        # Créer le tableau détaillé
+        others_df = pd.DataFrame({
+            'Source': others_percentages.index,
+            'Nombre': others_detail.values,
+            'Pourcentage': others_percentages.values.round(1)
+        }).sort_values('Pourcentage', ascending=False)
+        
+    else:
+        fig_others = None
+        others_df = pd.DataFrame()
     
-    return None, None
+    # Afficher les graphiques
+    st.plotly_chart(fig_main, key="sources_principal")
+    
+    if fig_others is not None:
+        st.subheader("Détail des autres sources d'information")
+        
+        # Afficher le graphique en barres
+        st.plotly_chart(fig_others, key="sources_autres")
+        
+        # Afficher le tableau détaillé
+        st.subheader("Liste complète des autres sources")
+        st.dataframe(others_df, hide_index=True)
+    
+    return fig_main, main_percentages
 
 def create_satisfaction_evolution_chart(df):
     # Trouver la colonne de satisfaction
@@ -1353,25 +1399,33 @@ def create_streamlit_dashboard():
     elif page == "Sources et Communication":
         st.header("Sources d'Information et Communication")
         
-        # Afficher le graphique des sources
+        # Afficher les graphiques des sources
         source_fig, source_data = analyze_nl_awareness_sources(df)
-        if source_fig:
-            st.plotly_chart(source_fig)
+        
+        # Ajouter une note explicative
+        st.markdown("""
+            <div style='background-color: #f0f2f6; padding: 15px; border-radius: 5px; margin-bottom: 20px;'>
+                <p style='margin: 0; font-size: 14px; color: #1f1f1f;'>
+                    <i>Note : Les pourcentages peuvent dépasser 100% car un même appelant peut avoir découvert Nightline 
+                    via plusieurs sources différentes.</i>
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Ne pas afficher le graphique ici car il est déjà affiché dans analyze_nl_awareness_sources
         
         # Option pour générer le rapport détaillé
         if st.button("Générer un rapport détaillé"):
-            # Calculer toutes les métriques nécessaires
             wellbeing_analysis = analyze_wellbeing_impact(df)
             call_exp = analyze_call_experience(df)
             
             report = generate_detailed_report(
                 df,
                 wellbeing_analysis,
-                call_exp,  # Utiliser les nouvelles métriques
+                call_exp,
                 source_data
             )
             
-            # Permettre le téléchargement du rapport
             st.download_button(
                 label="Télécharger le rapport (HTML)",
                 data=report,
