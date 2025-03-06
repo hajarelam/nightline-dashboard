@@ -1,8 +1,9 @@
 streamlit
 pandas
+numpy
 plotly
+seaborn
+matplotlib
 gspread
 oauth2client
-numpy
-matplotlib
-seaborn
+xlsxwriter
