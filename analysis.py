@@ -13,6 +13,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 import os
 import traceback
 import json
+from io import BytesIO
+import xlsxwriter
 
 def check_password():
     # Temporairement retourner True pour désactiver l'authentification
@@ -211,65 +213,182 @@ def analyze_call_experience(df):
     }
 
 def analyze_wellbeing_impact(df):
-    # Find relevant columns using partial matching
+    # Trouver les colonnes avant/après
     before_col = find_closest_column(df, "AVANT d'appeler")
     after_col = find_closest_column(df, "APRÈS après l'appel")
     
-    # Find experience columns
-    comfort_col = find_closest_column(df, "l'aise pour aborder")
-    understood_col = find_closest_column(df, "Compris")
-    supported_col = find_closest_column(df, "Soutenu")
-    lonely_col = find_closest_column(df, "Moins seul")
+    # Filtrer les réponses valides
+    valid_responses = df[df[before_col].notna() & df[after_col].notna()]
+    total_valid = len(valid_responses)
     
-    # Analyze before/after states
-    before_after = pd.DataFrame({
-        'before': df[before_col],
-        'after': df[after_col]
+    # Mapping plus précis des états après l'appel
+    improvement_mapping = {
+        "Ça allait beaucoup plus mal": {"improvement": 0, "magnitude": 0},
+        "Ça allait un peu plus mal": {"improvement": 0, "magnitude": 0},
+        "Ça allait pareil": {"improvement": 0, "magnitude": 0},
+        "Ça allait un peu mieux": {"improvement": 33.3, "magnitude": 1},    # amélioration légère
+        "Ça allait beaucoup mieux": {"improvement": 100, "magnitude": 3}    # amélioration forte
+    }
+    
+    def calculate_improvement_magnitude(row):
+        before = row[before_col]
+        after = row[after_col]
+        
+        if after == "Je ne sais pas dire comment je me sentais":
+            return None
+            
+        if before == "Ça allait très mal":
+            # Utiliser directement le mapping pour l'état après
+            return improvement_mapping.get(after, {"improvement": 0, "magnitude": 0})
+        return None
+    
+    # 1. Pourcentage qui se sentent mal ou très mal avant
+    feeling_bad_before = valid_responses[valid_responses[before_col].isin(
+        ["Ça allait très mal", "Ça allait plutôt mal"]
+    )]
+    feeling_bad_pct = (len(feeling_bad_before) / total_valid) * 100
+    
+    # 2. Analyse de l'amélioration
+    def compare_states(before, after):
+        if after == "Je ne sais pas dire comment je me sentais":
+            return None
+        if after == "Ça allait pareil":
+            return False
+        # Comparer les états directement sans mapping
+        if "mieux" in after.lower():
+            return True
+        if "mal" in after.lower():
+            return False
+        return None
+    
+    # Appliquer la comparaison
+    improvements = valid_responses.apply(
+        lambda row: compare_states(row[before_col], row[after_col]), 
+        axis=1
+    )
+    improvements = improvements.dropna()
+    
+    overall_improvement_pct = (improvements.sum() / len(improvements)) * 100 if len(improvements) > 0 else 0
+    
+    # 3. Analyse spécifique des "très mal"
+    very_bad_before = valid_responses[valid_responses[before_col] == "Ça allait très mal"]
+    very_bad_pct = (len(very_bad_before) / total_valid) * 100
+    
+    if len(very_bad_before) > 0:
+        # Calculer les améliorations
+        improvements = very_bad_before.apply(calculate_improvement_magnitude, axis=1).dropna()
+        
+        # Filtrer les améliorations positives
+        positive_improvements = [imp for imp in improvements if imp and imp['improvement'] > 0]
+        
+        if positive_improvements:
+            # Calculer les statistiques
+            improvement_count = len(positive_improvements)
+            very_bad_improvement_pct = (improvement_count / len(very_bad_before)) * 100
+            avg_improvement = sum(imp['improvement'] for imp in positive_improvements) / improvement_count
+            
+            # Calculer les niveaux d'amélioration
+            level_counts = {
+                1: sum(1 for imp in positive_improvements if imp['magnitude'] == 1),  # légère
+                2: 0,  # On n'utilise pas d'amélioration modérée
+                3: sum(1 for imp in positive_improvements if imp['magnitude'] == 3)   # forte
+            }
+            
+            # Calculer le pourcentage pour chaque niveau
+            total_improved = sum(level_counts.values())
+            if total_improved > 0:
+                level_percentages = {
+                    level: (count / total_improved) * 100 
+                    for level, count in level_counts.items()
+                }
+            else:
+                level_percentages = {1: 0, 2: 0, 3: 0}
+        else:
+            very_bad_improvement_pct = 0
+            avg_improvement = 0
+            level_percentages = {1: 0, 2: 0, 3: 0}
+    else:
+        very_bad_improvement_pct = 0
+        avg_improvement = 0
+        level_percentages = {1: 0, 2: 0, 3: 0}
+    
+    # Créer les DataFrames pour les statistiques avant/après
+    before_counts = valid_responses[before_col].value_counts()
+    before_pct = (before_counts / total_valid * 100).round(1)
+    before_df = pd.DataFrame({
+        'État': before_counts.index,
+        'Nombre': before_counts.values,
+        'Pourcentage': before_pct.values
+    })
+
+    after_counts = valid_responses[after_col].value_counts()
+    after_pct = (after_counts / total_valid * 100).round(1)
+    after_df = pd.DataFrame({
+        'État': after_counts.index,
+        'Nombre': after_counts.values,
+        'Pourcentage': after_pct.values
     })
     
-    # Calculate detailed metrics
-    improved = (before_after['after'] > before_after['before']).sum()
-    worsened = (before_after['after'] < before_after['before']).sum()
-    same = (before_after['after'] == before_after['before']).sum()
-    
-    improvement_percentage = (improved / len(df)) * 100
-    worsening_percentage = (worsened / len(df)) * 100
-    
-    # Analyze feeling states
-    before_states = df[before_col].value_counts()
-    after_states = df[after_col].value_counts()
-    
-    # Analyze call experience with case-insensitive matching
-    def get_positive_percentage(series):
-        positive_responses = series.str.lower().isin(['oui', 'yes'])
-        return (positive_responses.sum() / len(series)) * 100
-    
-    experience_metrics = {
-        'comfort': get_positive_percentage(df[comfort_col]) if comfort_col else 0,
-        'understood': get_positive_percentage(df[understood_col]) if understood_col else 0,
-        'supported': get_positive_percentage(df[supported_col]) if supported_col else 0,
-        'less_lonely': get_positive_percentage(df[lonely_col]) if lonely_col else 0
+    # Ajouter l'analyse des questions sur le ressenti pendant l'appel
+    experience_cols = {
+        'À l\'aise': find_closest_column(df, "l'aise pour aborder"),
+        'Compris(e)': find_closest_column(df, "Compris"),
+        'Soutenu(e)': find_closest_column(df, "Soutenu"),
+        'Moins seul(e)': find_closest_column(df, "Moins seul")
     }
     
-    # Analyze future intentions with case-insensitive matching
-    resources_col = find_closest_column(df, "Consulter des ressources")
-    talk_family_col = find_closest_column(df, "Parler avec des proches")
-    talk_professional_col = find_closest_column(df, "professionnel de santé")
+    experience_stats = {}
+    for name, col in experience_cols.items():
+        if col:
+            # Exclure "Ne s'applique pas"
+            valid_responses = df[~df[col].str.contains("ne s'applique pas", na=False, case=False)]
+            yes_count = valid_responses[col].str.contains('Oui', na=False, case=False).sum()
+            no_count = valid_responses[col].str.contains('Non', na=False, case=False).sum()
+            total_valid = yes_count + no_count
+            
+            if total_valid > 0:
+                experience_stats[name] = {
+                    'Oui': yes_count,
+                    'Non': no_count,
+                    'Pourcentage Oui': (yes_count / total_valid) * 100,
+                    'Pourcentage Non': (no_count / total_valid) * 100
+                }
     
-    future_intentions = {
-        'seek_resources': get_positive_percentage(df[resources_col]) if resources_col else 0,
-        'talk_to_family': get_positive_percentage(df[talk_family_col]) if talk_family_col else 0,
-        'seek_professional': get_positive_percentage(df[talk_professional_col]) if talk_professional_col else 0
+    # Ajouter l'analyse des intentions futures
+    intention_cols = {
+        'Consulter des ressources': find_closest_column(df, "Consulter des ressources"),
+        'Consulter un professionnel': find_closest_column(df, "professionnel de santé"),
+        'Parler avec des proches': find_closest_column(df, "Parler avec des proches")
     }
+    
+    intention_stats = {}
+    for name, col in intention_cols.items():
+        if col:
+            # Exclure "Ne s'applique pas"
+            valid_responses = df[~df[col].str.contains("ne s'applique pas", na=False, case=False)]
+            yes_count = valid_responses[col].str.contains('Oui', na=False, case=False).sum()
+            no_count = valid_responses[col].str.contains('Non', na=False, case=False).sum()
+            total_valid = yes_count + no_count
+            
+            if total_valid > 0:
+                intention_stats[name] = {
+                    'Oui': yes_count,
+                    'Non': no_count,
+                    'Pourcentage Oui': (yes_count / total_valid) * 100,
+                    'Pourcentage Non': (no_count / total_valid) * 100
+                }
     
     return {
-        'before_after': before_after,
-        'improvement_percentage': improvement_percentage,
-        'worsening_percentage': worsening_percentage,
-        'before_states': before_states,
-        'after_states': after_states,
-        'experience_metrics': experience_metrics,
-        'future_intentions': future_intentions
+        'feeling_bad_before_pct': feeling_bad_pct,
+        'overall_improvement_pct': overall_improvement_pct,
+        'very_bad_pct': very_bad_pct,
+        'very_bad_improvement_pct': very_bad_improvement_pct,
+        'avg_improvement_magnitude': avg_improvement,
+        'improvement_levels': level_percentages,
+        'before_stats': before_df,
+        'after_stats': after_df,
+        'experience_stats': experience_stats,
+        'intention_stats': intention_stats
     }
 
 def analyze_reasons_for_calling(df):
@@ -632,7 +751,7 @@ def create_streamlit_dashboard():
     # Navigation existante
     page = st.sidebar.selectbox(
         "Navigation",
-        ["Vue d'ensemble", "Expérience Appelants", "Démographie", "Raisons des Appels", "Sources et Communication"]
+        ["Vue d'ensemble", "Expérience Appelants", "Démographie", "Impact et Satisfaction", "Raisons des Appels", "Sources et Communication"]
     )
     
     # Calculate KPIs
@@ -952,6 +1071,178 @@ def create_streamlit_dashboard():
         else:
             st.warning("Pas assez de données pour générer le graphique de répartition académique")
         
+    elif page == "Impact et Satisfaction":
+        st.header("Impact et Satisfaction des Appelants")
+        
+        # Calculer les métriques
+        wellbeing_metrics = analyze_wellbeing_impact(df)
+        
+        # Afficher les métriques principales dans des colonnes
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "État initial critique",
+                f"{wellbeing_metrics['feeling_bad_before_pct']:.1f}%",
+                help="Pourcentage d'appelants se sentant mal ou très mal avant l'appel"
+            )
+
+        with col2:
+            st.metric(
+                "Amélioration globale",
+                f"{wellbeing_metrics['overall_improvement_pct']:.1f}%",
+                help="Pourcentage d'appelants qui se sont sentis mieux après l'appel"
+            )
+
+        with col3:
+            st.metric(
+                "Amélioration cas critiques",
+                f"{wellbeing_metrics['very_bad_improvement_pct']:.1f}%",
+                help="Pourcentage d'amélioration pour les appelants qui se sentaient très mal"
+            )
+
+        # Ajouter une section d'analyse détaillée
+        st.markdown("---")
+        st.subheader("Analyse détaillée de l'impact")
+
+        # Créer un conteneur stylisé pour les statistiques détaillées
+        st.markdown(f"""
+            <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px;'>
+                <p style='font-size: 16px; color: #1f1f1f;'>
+                    • <b>{wellbeing_metrics['feeling_bad_before_pct']:.1f}%</b> des appelants se sentaient mal ou très mal avant l'appel
+                    <br><br>
+                    • <b>{wellbeing_metrics['overall_improvement_pct']:.1f}%</b> se sont sentis mieux après l'appel
+                    <br><br>
+                    • Parmi les <b>{wellbeing_metrics['very_bad_pct']:.1f}%</b> qui se sentaient très mal au moment de l'appel :
+                    <br>- <b>{wellbeing_metrics['very_bad_improvement_pct']:.1f}%</b> ont constaté une amélioration
+                    <br>- L'amélioration moyenne est de <b>{wellbeing_metrics['avg_improvement_magnitude']:.1f}%</b>
+                    <br>- Détail de l'amélioration :
+                    <br>&nbsp;&nbsp;&nbsp;• <b>{wellbeing_metrics['improvement_levels'][1]:.1f}%</b> ont constaté une légère amélioration
+                    <br>&nbsp;&nbsp;&nbsp;• <b>{wellbeing_metrics['improvement_levels'][2]:.1f}%</b> ont constaté une amélioration modérée
+                    <br>&nbsp;&nbsp;&nbsp;• <b>{wellbeing_metrics['improvement_levels'][3]:.1f}%</b> ont constaté une forte amélioration
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Afficher les statistiques détaillées
+        st.subheader("État avant l'appel")
+        before_df = wellbeing_metrics['before_stats']  # C'est déjà un DataFrame avec les bonnes colonnes
+        st.dataframe(before_df.sort_values('Nombre', ascending=False), hide_index=True)
+
+        st.subheader("État après l'appel")
+        after_df = wellbeing_metrics['after_stats']  # C'est déjà un DataFrame avec les bonnes colonnes
+        st.dataframe(after_df.sort_values('Nombre', ascending=False), hide_index=True)
+        
+        # Bouton de téléchargement
+        st.download_button(
+            label="Télécharger les données (CSV)",
+            data=create_csv_report(before_df, after_df),
+            file_name=f"impact_satisfaction_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+        
+        # Ajouter un graphique avant/après
+        st.subheader("Évolution de l'état émotionnel")
+
+        # Créer deux colonnes pour les graphiques
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Graphique "Avant l'appel"
+            before_data = wellbeing_metrics['before_stats']  # Déjà un DataFrame
+            fig1 = px.pie(
+                before_data,
+                values='Nombre',
+                names='État',
+                title="État avant l'appel",
+                color_discrete_sequence=px.colors.sequential.Teal,
+                hover_data=['Pourcentage'],
+                custom_data=['Pourcentage']
+            )
+            fig1.update_traces(
+                texttemplate='%{label}<br>%{customdata[0]:.1f}%',
+                hovertemplate='%{label}<br>Nombre: %{value}<br>Pourcentage: %{customdata[0]:.1f}%'
+            )
+            st.plotly_chart(fig1)
+
+        with col2:
+            # Graphique "Après l'appel"
+            after_data = wellbeing_metrics['after_stats']  # Déjà un DataFrame
+            fig2 = px.pie(
+                after_data,
+                values='Nombre',
+                names='État',
+                title="État après l'appel",
+                color_discrete_sequence=px.colors.sequential.Teal,
+                hover_data=['Pourcentage'],
+                custom_data=['Pourcentage']
+            )
+            fig2.update_traces(
+                texttemplate='%{label}<br>%{customdata[0]:.1f}%',
+                hovertemplate='%{label}<br>Nombre: %{value}<br>Pourcentage: %{customdata[0]:.1f}%'
+            )
+            st.plotly_chart(fig2)
+        
+        # Ajouter des graphiques pour visualiser ces données
+        st.markdown("---")
+        st.subheader("Ressenti pendant l'appel")
+
+        # Créer un DataFrame pour le ressenti
+        exp_data = []
+        for feeling, stats in wellbeing_metrics['experience_stats'].items():
+            exp_data.append({
+                'Ressenti': feeling,
+                'Oui (%)': f"{stats['Pourcentage Oui']:.1f}%",
+                'Non (%)': f"{stats['Pourcentage Non']:.1f}%",
+                'Nombre Oui': stats['Oui'],
+                'Nombre Non': stats['Non']
+            })
+
+        exp_df = pd.DataFrame(exp_data)
+        st.dataframe(exp_df, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("Intentions après l'appel")
+
+        # Créer un DataFrame pour les intentions
+        int_data = []
+        for intention, stats in wellbeing_metrics['intention_stats'].items():
+            int_data.append({
+                'Intention': intention,
+                'Oui (%)': f"{stats['Pourcentage Oui']:.1f}%",
+                'Non (%)': f"{stats['Pourcentage Non']:.1f}%",
+                'Nombre Oui': stats['Oui'],
+                'Nombre Non': stats['Non']
+            })
+
+        int_df = pd.DataFrame(int_data)
+        st.dataframe(int_df, hide_index=True)
+
+        # Graphique des intentions
+        fig_int = px.bar(
+            int_data,
+            x='Intention',
+            y=[float(str(x).rstrip('%')) for x in int_df['Oui (%)']],
+            title="Intentions après l'appel",
+            labels={'y': 'Pourcentage de réponses positives'},
+            color_discrete_sequence=['#4ecdc4']
+        )
+        fig_int.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
+        st.plotly_chart(fig_int)
+        
+        # Ajouter un bouton pour exporter les données en Excel
+        st.markdown("---")
+        st.subheader("Exporter les données")
+
+        # Bouton pour télécharger le rapport Excel
+        st.download_button(
+            label="📊 Télécharger toutes les données (Excel)",
+            data=create_excel_report(wellbeing_metrics),
+            file_name=f"impact_satisfaction_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Télécharger toutes les données de cette section en format Excel"
+        )
+        
     elif page == "Raisons des Appels":
         st.header("Raisons des Appels")
         
@@ -1094,6 +1385,86 @@ def create_streamlit_dashboard():
         file_name='nightline_data_filtered.csv',
         mime='text/csv',
     )
+
+def create_csv_report(exp_df, int_df):
+    """Crée un fichier CSV avec les données d'impact et satisfaction"""
+    output = BytesIO()
+    
+    # Combine les deux DataFrames avec un séparateur
+    combined_data = (
+        "RESSENTI PENDANT L'APPEL\n" +
+        exp_df.to_csv(index=False) +
+        "\n\nINTENTIONS APRÈS L'APPEL\n" +
+        int_df.to_csv(index=False)
+    )
+    
+    return combined_data.encode('utf-8')
+
+def create_excel_report(wellbeing_metrics):
+    """Crée un fichier Excel avec toutes les données d'impact et satisfaction"""
+    output = BytesIO()
+    
+    # Créer un nouveau classeur Excel
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # 1. État avant/après
+        wellbeing_metrics['before_stats'].to_excel(writer, sheet_name='État avant', index=False)
+        wellbeing_metrics['after_stats'].to_excel(writer, sheet_name='État après', index=False)
+        
+        # 2. Statistiques détaillées
+        stats_data = pd.DataFrame({
+            'Métrique': [
+                'Appelants se sentant mal ou très mal avant',
+                'Appelants se sentant mieux après',
+                'Appelants se sentant très mal avant',
+                'Amélioration des cas très mal',
+                'Amélioration moyenne des cas très mal'
+            ],
+            'Pourcentage': [
+                f"{wellbeing_metrics['feeling_bad_before_pct']:.1f}%",
+                f"{wellbeing_metrics['overall_improvement_pct']:.1f}%",
+                f"{wellbeing_metrics['very_bad_pct']:.1f}%",
+                f"{wellbeing_metrics['very_bad_improvement_pct']:.1f}%",
+                f"{wellbeing_metrics['avg_improvement_magnitude']:.1f}%"
+            ]
+        })
+        stats_data.to_excel(writer, sheet_name='Statistiques', index=False)
+        
+        # 3. Détail des améliorations
+        improvement_data = pd.DataFrame({
+            'Niveau d\'amélioration': ['Légère', 'Modérée', 'Forte'],
+            'Pourcentage': [
+                f"{wellbeing_metrics['improvement_levels'][1]:.1f}%",
+                f"{wellbeing_metrics['improvement_levels'][2]:.1f}%",
+                f"{wellbeing_metrics['improvement_levels'][3]:.1f}%"
+            ]
+        })
+        improvement_data.to_excel(writer, sheet_name='Détail améliorations', index=False)
+        
+        # 4. Ressenti pendant l'appel
+        exp_data = []
+        for feeling, stats in wellbeing_metrics['experience_stats'].items():
+            exp_data.append({
+                'Ressenti': feeling,
+                'Oui (%)': f"{stats['Pourcentage Oui']:.1f}%",
+                'Non (%)': f"{stats['Pourcentage Non']:.1f}%",
+                'Nombre Oui': stats['Oui'],
+                'Nombre Non': stats['Non']
+            })
+        pd.DataFrame(exp_data).to_excel(writer, sheet_name='Ressenti', index=False)
+        
+        # 5. Intentions après l'appel
+        int_data = []
+        for intention, stats in wellbeing_metrics['intention_stats'].items():
+            int_data.append({
+                'Intention': intention,
+                'Oui (%)': f"{stats['Pourcentage Oui']:.1f}%",
+                'Non (%)': f"{stats['Pourcentage Non']:.1f}%",
+                'Nombre Oui': stats['Oui'],
+                'Nombre Non': stats['Non']
+            })
+        pd.DataFrame(int_data).to_excel(writer, sheet_name='Intentions', index=False)
+    
+    return output.getvalue()
 
 def main():
     if check_password():
