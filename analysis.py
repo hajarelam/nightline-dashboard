@@ -537,7 +537,10 @@ def analyze_nl_awareness_sources(df):
     main_counts = main_categories.value_counts()
     main_percentages = (main_counts / total_respondents * 100).round(1)
     
-    # Créer le graphique principal
+    # Exclure la catégorie "Autres" du graphique principal
+    main_percentages = main_percentages[main_percentages.index != "Autres"]
+    
+    # Créer le graphique principal (sans "Autres")
     fig_main = go.Figure()
     fig_main.add_trace(go.Bar(
         y=main_percentages.index,
@@ -549,7 +552,7 @@ def analyze_nl_awareness_sources(df):
     ))
     
     fig_main.update_layout(
-        title="Sources d'information",
+        title="Sources d'information principales",
         xaxis_title="Pourcentage des appelants",
         yaxis_title=None,
         height=400
@@ -557,7 +560,8 @@ def analyze_nl_awareness_sources(df):
     
     # Analyser le détail de la catégorie "Autres"
     others_detail = detailed_categories[main_categories == "Autres"].value_counts()
-    others_percentages = (others_detail / total_respondents * 100).round(1)
+    total_others = len(detailed_categories[main_categories == "Autres"])
+    others_percentages = (others_detail / total_others * 100).round(1)
     
     if len(others_percentages) > 0:
         # Créer le graphique détaillé pour "Autres"
@@ -572,8 +576,8 @@ def analyze_nl_awareness_sources(df):
         ))
         
         fig_others.update_layout(
-            title="Détail des autres sources d'information",
-            xaxis_title="Pourcentage des appelants",
+            title="Détail de la catégorie 'Autres'",
+            xaxis_title="Pourcentage des appelants de la catégorie 'Autres'",
             yaxis_title=None,
             height=max(400, len(others_percentages) * 25),
             margin=dict(l=200, r=20, t=40, b=20)
@@ -594,9 +598,7 @@ def analyze_nl_awareness_sources(df):
     st.plotly_chart(fig_main, key="sources_principal")
     
     if fig_others is not None:
-        st.subheader("Détail des autres sources d'information")
-        
-        # Afficher le graphique en barres
+        st.subheader("Détail de la catégorie 'Autres'")
         st.plotly_chart(fig_others, key="sources_autres")
         
         # Afficher le tableau détaillé
@@ -1401,18 +1403,6 @@ def create_streamlit_dashboard():
         
         # Afficher les graphiques des sources
         source_fig, source_data = analyze_nl_awareness_sources(df)
-        
-        # Ajouter une note explicative
-        st.markdown("""
-            <div style='background-color: #f0f2f6; padding: 15px; border-radius: 5px; margin-bottom: 20px;'>
-                <p style='margin: 0; font-size: 14px; color: #1f1f1f;'>
-                    <i>Note : Les pourcentages peuvent dépasser 100% car un même appelant peut avoir découvert Nightline 
-                    via plusieurs sources différentes.</i>
-                </p>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        # Ne pas afficher le graphique ici car il est déjà affiché dans analyze_nl_awareness_sources
         
         # Option pour générer le rapport détaillé
         if st.button("Générer un rapport détaillé"):
