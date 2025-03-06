@@ -523,7 +523,6 @@ def analyze_nl_awareness_sources(df):
         elif any(term in source for term in ["internet", "site", "web"]):
             return "Site internet", source.title()
         else:
-            # Nettoyer et standardiser le texte pour la catégorie "Autres"
             cleaned_source = source.strip().capitalize()
             return "Autres", cleaned_source
     
@@ -532,80 +531,179 @@ def analyze_nl_awareness_sources(df):
     main_categories = categorized.apply(lambda x: x[0])
     detailed_categories = categorized.apply(lambda x: x[1])
     
-    # Calculer les pourcentages
-    total_respondents = len(df)
-    main_counts = main_categories.value_counts()
-    main_percentages = (main_counts / total_respondents * 100).round(1)
+    # Calculer les métriques principales
+    total_respondents = len(df)  # Nombre total d'appelants
+    total_responses = len(main_categories)  # Nombre total de réponses
     
     # Exclure la catégorie "Autres" du graphique principal
-    main_percentages = main_percentages[main_percentages.index != "Autres"]
+    main_counts = main_categories[main_categories != "Autres"].value_counts()
     
-    # Créer le graphique principal (sans "Autres")
+    # Calculer les deux types de pourcentages pour le graphique principal
+    main_percentages_by_caller = (main_counts / total_respondents * 100).round(1)
+    main_percentages_by_response = (main_counts / total_responses * 100).round(1)
+    
+    # Créer le graphique principal avec les deux métriques
     fig_main = go.Figure()
+    
+    # Barres pour % par appelant
     fig_main.add_trace(go.Bar(
-        y=main_percentages.index,
-        x=main_percentages.values,
+        name="% des appelants",
+        y=main_percentages_by_caller.index,
+        x=main_percentages_by_caller.values,
         orientation='h',
         marker_color='#4ecdc4',
-        text=[f'{x:.1f}%' for x in main_percentages.values],
+        text=[f'{x:.1f}%' for x in main_percentages_by_caller.values],
+        textposition='outside'
+    ))
+    
+    # Barres pour % par réponse
+    fig_main.add_trace(go.Bar(
+        name="% des réponses",
+        y=main_percentages_by_response.index,
+        x=main_percentages_by_response.values,
+        orientation='h',
+        marker_color='#ff6b6b',
+        text=[f'{x:.1f}%' for x in main_percentages_by_response.values],
         textposition='outside'
     ))
     
     fig_main.update_layout(
         title="Sources d'information principales",
-        xaxis_title="Pourcentage des appelants",
+        xaxis_title="Pourcentage",
         yaxis_title=None,
-        height=400
+        height=400,
+        barmode='group',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
     )
     
     # Analyser le détail de la catégorie "Autres"
     others_detail = detailed_categories[main_categories == "Autres"].value_counts()
     total_others = len(detailed_categories[main_categories == "Autres"])
-    others_percentages = (others_detail / total_others * 100).round(1)
     
-    if len(others_percentages) > 0:
-        # Créer le graphique détaillé pour "Autres"
+    # Calculer les deux types de pourcentages pour "Autres"
+    others_percentages_by_caller = (others_detail / total_respondents * 100).round(1)
+    others_percentages_by_response = (others_detail / total_others * 100).round(1)
+    
+    if len(others_percentages_by_response) > 0:
+        # Créer le graphique détaillé pour "Autres" avec les deux métriques
         fig_others = go.Figure()
+        
+        # Barres pour % par appelant
         fig_others.add_trace(go.Bar(
-            y=others_percentages.index,
-            x=others_percentages.values,
+            name="% des appelants",
+            y=others_percentages_by_caller.index,
+            x=others_percentages_by_caller.values,
+            orientation='h',
+            marker_color='#4ecdc4',
+            text=[f'{x:.1f}%' for x in others_percentages_by_caller.values],
+            textposition='outside'
+        ))
+        
+        # Barres pour % par réponse
+        fig_others.add_trace(go.Bar(
+            name="% des réponses 'Autres'",
+            y=others_percentages_by_response.index,
+            x=others_percentages_by_response.values,
             orientation='h',
             marker_color='#ff6b6b',
-            text=[f'{x:.1f}%' for x in others_percentages.values],
+            text=[f'{x:.1f}%' for x in others_percentages_by_response.values],
             textposition='outside'
         ))
         
         fig_others.update_layout(
             title="Détail de la catégorie 'Autres'",
-            xaxis_title="Pourcentage des appelants de la catégorie 'Autres'",
+            xaxis_title="Pourcentage",
             yaxis_title=None,
-            height=max(400, len(others_percentages) * 25),
-            margin=dict(l=200, r=20, t=40, b=20)
+            height=max(400, len(others_percentages_by_response) * 25),
+            margin=dict(l=200, r=20, t=40, b=20),
+            barmode='group',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
         )
         
         # Créer le tableau détaillé
         others_df = pd.DataFrame({
-            'Source': others_percentages.index,
+            'Source': others_percentages_by_response.index,
             'Nombre': others_detail.values,
-            'Pourcentage': others_percentages.values.round(1)
-        }).sort_values('Pourcentage', ascending=False)
+            '% des appelants': others_percentages_by_caller.values.round(1),
+            '% des réponses': others_percentages_by_response.values.round(1)
+        }).sort_values('Nombre', ascending=False)
         
     else:
         fig_others = None
         others_df = pd.DataFrame()
     
-    # Afficher les graphiques
+    # Afficher les métriques principales
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            "Nombre total d'appelants",
+            total_respondents,
+            help="Nombre total d'appelants ayant répondu au questionnaire"
+        )
+    
+    with col2:
+        st.metric(
+            "Nombre total de réponses",
+            total_responses,
+            help="Nombre total de sources mentionnées"
+        )
+    
+    with col3:
+        st.metric(
+            "Moyenne de sources par appelant",
+            f"{total_responses/total_respondents:.1f}",
+            help="En moyenne, chaque appelant mentionne ce nombre de sources"
+        )
+    
+    # Afficher le graphique principal
     st.plotly_chart(fig_main, key="sources_principal")
     
     if fig_others is not None:
         st.subheader("Détail de la catégorie 'Autres'")
-        st.plotly_chart(fig_others, key="sources_autres")
         
-        # Afficher le tableau détaillé
+        # Métriques pour la catégorie "Autres"
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "Nombre de réponses 'Autres'",
+                total_others,
+                help="Nombre total de réponses dans la catégorie 'Autres'"
+            )
+        
+        with col2:
+            st.metric(
+                "% des réponses totales",
+                f"{(total_others/total_responses*100):.1f}%",
+                help="Pourcentage que représente la catégorie 'Autres' sur l'ensemble des réponses"
+            )
+        
+        with col3:
+            st.metric(
+                "Sources uniques",
+                len(others_percentages_by_response),
+                help="Nombre de sources différentes dans la catégorie 'Autres'"
+            )
+        
+        # Afficher le graphique et le tableau
+        st.plotly_chart(fig_others, key="sources_autres")
         st.subheader("Liste complète des autres sources")
         st.dataframe(others_df, hide_index=True)
     
-    return fig_main, main_percentages
+    return fig_main, main_percentages_by_response
 
 def create_satisfaction_evolution_chart(df):
     # Trouver la colonne de satisfaction
