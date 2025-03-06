@@ -1204,6 +1204,16 @@ def create_streamlit_dashboard():
         st.markdown("---")
         st.subheader("Intentions après l'appel")
 
+        # Ajouter une note explicative
+        st.markdown("""
+            <div style='background-color: #f0f2f6; padding: 15px; border-radius: 5px; margin-bottom: 20px;'>
+                <p style='margin: 0; font-size: 14px; color: #1f1f1f;'>
+                    <i>Note : Les pourcentages peuvent dépasser 100% car un même appelant peut avoir plusieurs intentions 
+                    (par exemple, vouloir à la fois consulter des ressources et parler avec des proches).</i>
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+
         # Créer un DataFrame pour les intentions
         int_data = []
         for intention, stats in wellbeing_metrics['intention_stats'].items():
