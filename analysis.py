@@ -605,7 +605,7 @@ def analyze_nl_awareness_sources(df):
             textposition='outside'
         ))
         
-        # Barres pour % par réponse
+        # Barres pour % des réponses
         fig_others.add_trace(go.Bar(
             name="% des réponses 'Autres'",
             y=others_percentages_by_response.index,
@@ -806,6 +806,206 @@ def create_satisfaction_evolution_chart(df):
     
     return None
 
+def process_feedback(df):
+    # Traiter les colonnes spécifiques avec les noms exacts
+    feedback_columns = {
+        "Indiques nous si les phrases ci-dessous sont vraies ou fausses pour toi [Cet appel m'a été utile]": "Cet appel m'a été utile",
+        "Indiques nous si les phrases ci-dessous sont vraies ou fausses pour toi [Sans cet appel, je n'aurai rien fait d'autre pour obtenir du soutien ou de l'aide]": "Sans cet appel, je n'aurai rien fait d'autre pour obtenir du soutien ou de l'aide",
+        "Indiques nous si les phrases ci-dessous sont vraies ou fausses pour toi [Durant l'appel j'ai partagé des sentiments ou des expériences que je n'ai jamais partagés avec quelqu'un d'autre]": "Durant l'appel j'ai partagé des sentiments ou des expériences que je n'ai jamais partagés avec quelqu'un d'autre"
+    }
+    
+    # Créer un DataFrame pour stocker les résultats
+    results = pd.DataFrame(columns=["Feedback", "Oui (%)", "Non (%)", "Ne s'applique pas (%)", "Nombre Oui"])
+    
+    for question, col in feedback_columns.items():
+        if col in df.columns:
+            total_responses = len(df)
+            true_count = (df[col] == "Vrai").sum()
+            false_count = (df[col] == "Faux").sum()
+            not_applicable_count = (df[col] == "Cela ne s'applique pas vraiment à ma situation").sum()
+            
+            results = results.append({
+                "Feedback": question,
+                "Oui (%)": (true_count / total_responses) * 100 if total_responses > 0 else 0,
+                "Non (%)": (false_count / total_responses) * 100 if total_responses > 0 else 0,
+                "Ne s'applique pas (%)": (not_applicable_count / total_responses) * 100 if total_responses > 0 else 0,
+                "Nombre Oui": true_count
+            }, ignore_index=True)
+    
+    return results
+
+def analyze_new_columns(df):
+    # Créer un DataFrame pour afficher les résultats
+    results_df = pd.DataFrame({
+        "Question": [
+            "Cet appel m'a été utile",
+            "Sans cet appel, je n'aurai rien fait d'autre pour obtenir du soutien ou de l'aide",
+            "Durant l'appel j'ai partagé des sentiments ou des expériences que je n'ai jamais partagés avec quelqu'un d'autre"
+        ]
+    })
+    
+    # Colonnes complètes pour référence
+    columns = [
+        "Indiques nous si les phrases ci-dessous sont vraies ou fausses pour toi [Cet appel m'a été utile]",
+        "Indiques nous si les phrases ci-dessous sont vraies ou fausses pour toi [Sans cet appel, je n'aurai rien fait d'autre pour obtenir du soutien ou de l'aide]",
+        "Indiques nous si les phrases ci-dessous sont vraies ou fausses pour toi [Durant l'appel j'ai partagé des sentiments ou des expériences que je n'ai jamais partagés avec quelqu'un d'autre]"
+    ]
+    
+    # Calculer les pourcentages et les nombres pour chaque question
+    oui_pct = []
+    non_pct = []
+    nombre_oui = []
+    nombre_non = []
+    
+    for col in columns:
+        # Compter les "Vrai" et "Faux"
+        vrai_count = df[col].value_counts().get("Vrai", 0)
+        faux_count = df[col].value_counts().get("Faux", 0)
+        
+        # Calculer le total des réponses pour cette question spécifique
+        total_reponses = vrai_count + faux_count
+        
+        # Calculer les pourcentages
+        if total_reponses > 0:
+            oui_percent = (vrai_count / total_reponses) * 100
+            non_percent = (faux_count / total_reponses) * 100
+        else:
+            oui_percent = 0
+            non_percent = 0
+        
+        oui_pct.append(oui_percent)
+        non_pct.append(non_percent)
+        nombre_oui.append(vrai_count)
+        nombre_non.append(faux_count)
+    
+    # Ajouter les colonnes calculées au DataFrame
+    results_df["Oui (%)"] = oui_pct
+    results_df["Non (%)"] = non_pct
+    results_df["Nombre Oui"] = nombre_oui
+    results_df["Nombre Non"] = nombre_non
+    
+    return results_df
+
+def display_impact_satisfaction_analysis(df):
+    """
+    Fonction séparée pour afficher l'analyse dans la page Impact et Satisfaction
+    """
+    # Obtenir les résultats
+    results_df = analyze_new_columns(df)
+    
+    # Afficher les résultats
+    st.subheader("Analyse des nouvelles colonnes")
+    st.dataframe(results_df, hide_index=True)
+
+    # Ajouter un histogramme pour visualiser les résultats
+    fig = go.Figure()
+
+    # Ajouter les barres pour Oui et Non avec des couleurs douces
+    fig.add_trace(go.Bar(
+        x=results_df["Question"],
+        y=results_df["Oui (%)"],
+        name='Oui (%)',
+        marker_color='lightgreen'
+    ))
+
+    fig.add_trace(go.Bar(
+        x=results_df["Question"],
+        y=results_df["Non (%)"],
+        name='Non (%)',
+        marker_color='lightcoral'
+    ))
+
+    # Mettre à jour la mise en page du graphique
+    fig.update_layout(
+        title='Pourcentages de réponses',
+        barmode='group',
+        xaxis_title='Questions',
+        yaxis_title='Pourcentage',
+        template='plotly_dark'
+    )
+
+    st.plotly_chart(fig)
+
+def create_csv_report(exp_df, int_df):
+    """Crée un fichier CSV avec les données d'impact et satisfaction"""
+    output = BytesIO()
+    
+    # Combine les deux DataFrames avec un séparateur
+    combined_data = (
+        "RESSENTI PENDANT L'APPEL\n" +
+        exp_df.to_csv(index=False) +
+        "\n\nINTENTIONS APRÈS L'APPEL\n" +
+        int_df.to_csv(index=False)
+    )
+    
+    return combined_data.encode('utf-8')
+
+def create_excel_report(wellbeing_metrics):
+    """Crée un fichier Excel avec toutes les données d'impact et satisfaction"""
+    output = BytesIO()
+    
+    # Créer un nouveau classeur Excel
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # 1. État avant/après
+        wellbeing_metrics['before_stats'].to_excel(writer, sheet_name='État avant', index=False)
+        wellbeing_metrics['after_stats'].to_excel(writer, sheet_name='État après', index=False)
+        
+        # 2. Statistiques détaillées
+        stats_data = pd.DataFrame({
+            'Métrique': [
+                'Appelants se sentant mal ou très mal avant',
+                'Appelants se sentant mieux après',
+                'Appelants se sentant très mal avant',
+                'Amélioration des cas très mal',
+                'Amélioration moyenne des cas très mal'
+            ],
+            'Pourcentage': [
+                f"{wellbeing_metrics['feeling_bad_before_pct']:.1f}%",
+                f"{wellbeing_metrics['overall_improvement_pct']:.1f}%",
+                f"{wellbeing_metrics['very_bad_pct']:.1f}%",
+                f"{wellbeing_metrics['very_bad_improvement_pct']:.1f}%",
+                f"{wellbeing_metrics['avg_improvement_magnitude']:.1f}%"
+            ]
+        })
+        stats_data.to_excel(writer, sheet_name='Statistiques', index=False)
+        
+        # 3. Détail des améliorations
+        improvement_data = pd.DataFrame({
+            'Niveau d\'amélioration': ['Légère', 'Modérée', 'Forte'],
+            'Pourcentage': [
+                f"{wellbeing_metrics['improvement_levels'][1]:.1f}%",
+                f"{wellbeing_metrics['improvement_levels'][2]:.1f}%",
+                f"{wellbeing_metrics['improvement_levels'][3]:.1f}%"
+            ]
+        })
+        improvement_data.to_excel(writer, sheet_name='Détail améliorations', index=False)
+        
+        # 4. Ressenti pendant l'appel
+        exp_data = []
+        for feeling, stats in wellbeing_metrics['experience_stats'].items():
+            exp_data.append({
+                'Ressenti': feeling,
+                'Oui (%)': f"{stats['Pourcentage Oui']:.1f}%",
+                'Non (%)': f"{stats['Pourcentage Non']:.1f}%",
+                'Nombre Oui': stats['Oui'],
+                'Nombre Non': stats['Non']
+            })
+        pd.DataFrame(exp_data).to_excel(writer, sheet_name='Ressenti', index=False)
+        
+        # 5. Intentions après l'appel
+        int_data = []
+        for intention, stats in wellbeing_metrics['intention_stats'].items():
+            int_data.append({
+                'Intention': intention,
+                'Oui (%)': f"{stats['Pourcentage Oui']:.1f}%",
+                'Non (%)': f"{stats['Pourcentage Non']:.1f}%",
+                'Nombre Oui': stats['Oui'],
+                'Nombre Non': stats['Non']
+            })
+        pd.DataFrame(int_data).to_excel(writer, sheet_name='Intentions', index=False)
+    
+    return output.getvalue()
+
 def create_streamlit_dashboard():
     # Set page config
     st.set_page_config(
@@ -832,6 +1032,10 @@ def create_streamlit_dashboard():
     # Load data avec le bon chemin
     sheet_id = '1VJ0JaagpbXXKZrgiMRcvtoebo89ZgM2kdjcSEBhrANA'
     df = load_and_clean_data(sheet_id)
+    
+    if df.empty:
+        st.error("Aucune donnée à afficher.")
+        return
     
     # Trouver la colonne de date et la convertir en datetime
     date_col = find_closest_column(df, "Date")
@@ -890,6 +1094,31 @@ def create_streamlit_dashboard():
         
         if 'Tous' not in selected_satisfaction:
             df = df[df[satisfaction_col].isin(selected_satisfaction)]
+    
+    # Ajouter le filtre Antennes (régions)
+    # Utiliser find_closest_column pour être plus robuste
+    region_col = find_closest_column(df, "région es-tu étudiant")
+    
+    if region_col:
+        # Afficher le nom de la colonne trouvée pour le débogage
+        print(f"Colonne région trouvée: {region_col}")
+        
+        # Obtenir les valeurs uniques et les trier
+        regions = df[region_col].dropna().unique()
+        regions = sorted([r for r in regions if isinstance(r, str) and r.strip()])
+        
+        if len(regions) > 0:
+            st.sidebar.subheader("Antennes")
+            region_options = ['Toutes'] + regions
+            selected_regions = st.sidebar.multiselect(
+                "Sélectionner les régions",
+                options=region_options,
+                default=['Toutes']
+            )
+            
+            # Appliquer le filtre
+            if 'Toutes' not in selected_regions:
+                df = df[df[region_col].isin(selected_regions)]
     
     # Séparateur avant la navigation
     st.sidebar.markdown("---")
@@ -1220,6 +1449,10 @@ def create_streamlit_dashboard():
     elif page == "Impact et Satisfaction":
         st.header("Impact et Satisfaction des Appelants")
         
+        if df.empty:
+            st.error("Aucune donnée à afficher.")
+            return
+        
         # Calculer les métriques
         wellbeing_metrics = analyze_wellbeing_impact(df)
         
@@ -1386,6 +1619,9 @@ def create_streamlit_dashboard():
         fig_int.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
         st.plotly_chart(fig_int)
         
+        # Afficher l'analyse des nouvelles colonnes
+        display_impact_satisfaction_analysis(df)
+        
         # Ajouter un bouton pour exporter les données en Excel
         st.markdown("---")
         st.subheader("Exporter les données")
@@ -1538,90 +1774,10 @@ def create_streamlit_dashboard():
         mime='text/csv',
     )
 
-def create_csv_report(exp_df, int_df):
-    """Crée un fichier CSV avec les données d'impact et satisfaction"""
-    output = BytesIO()
-    
-    # Combine les deux DataFrames avec un séparateur
-    combined_data = (
-        "RESSENTI PENDANT L'APPEL\n" +
-        exp_df.to_csv(index=False) +
-        "\n\nINTENTIONS APRÈS L'APPEL\n" +
-        int_df.to_csv(index=False)
-    )
-    
-    return combined_data.encode('utf-8')
-
-def create_excel_report(wellbeing_metrics):
-    """Crée un fichier Excel avec toutes les données d'impact et satisfaction"""
-    output = BytesIO()
-    
-    # Créer un nouveau classeur Excel
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # 1. État avant/après
-        wellbeing_metrics['before_stats'].to_excel(writer, sheet_name='État avant', index=False)
-        wellbeing_metrics['after_stats'].to_excel(writer, sheet_name='État après', index=False)
-        
-        # 2. Statistiques détaillées
-        stats_data = pd.DataFrame({
-            'Métrique': [
-                'Appelants se sentant mal ou très mal avant',
-                'Appelants se sentant mieux après',
-                'Appelants se sentant très mal avant',
-                'Amélioration des cas très mal',
-                'Amélioration moyenne des cas très mal'
-            ],
-            'Pourcentage': [
-                f"{wellbeing_metrics['feeling_bad_before_pct']:.1f}%",
-                f"{wellbeing_metrics['overall_improvement_pct']:.1f}%",
-                f"{wellbeing_metrics['very_bad_pct']:.1f}%",
-                f"{wellbeing_metrics['very_bad_improvement_pct']:.1f}%",
-                f"{wellbeing_metrics['avg_improvement_magnitude']:.1f}%"
-            ]
-        })
-        stats_data.to_excel(writer, sheet_name='Statistiques', index=False)
-        
-        # 3. Détail des améliorations
-        improvement_data = pd.DataFrame({
-            'Niveau d\'amélioration': ['Légère', 'Modérée', 'Forte'],
-            'Pourcentage': [
-                f"{wellbeing_metrics['improvement_levels'][1]:.1f}%",
-                f"{wellbeing_metrics['improvement_levels'][2]:.1f}%",
-                f"{wellbeing_metrics['improvement_levels'][3]:.1f}%"
-            ]
-        })
-        improvement_data.to_excel(writer, sheet_name='Détail améliorations', index=False)
-        
-        # 4. Ressenti pendant l'appel
-        exp_data = []
-        for feeling, stats in wellbeing_metrics['experience_stats'].items():
-            exp_data.append({
-                'Ressenti': feeling,
-                'Oui (%)': f"{stats['Pourcentage Oui']:.1f}%",
-                'Non (%)': f"{stats['Pourcentage Non']:.1f}%",
-                'Nombre Oui': stats['Oui'],
-                'Nombre Non': stats['Non']
-            })
-        pd.DataFrame(exp_data).to_excel(writer, sheet_name='Ressenti', index=False)
-        
-        # 5. Intentions après l'appel
-        int_data = []
-        for intention, stats in wellbeing_metrics['intention_stats'].items():
-            int_data.append({
-                'Intention': intention,
-                'Oui (%)': f"{stats['Pourcentage Oui']:.1f}%",
-                'Non (%)': f"{stats['Pourcentage Non']:.1f}%",
-                'Nombre Oui': stats['Oui'],
-                'Nombre Non': stats['Non']
-            })
-        pd.DataFrame(int_data).to_excel(writer, sheet_name='Intentions', index=False)
-    
-    return output.getvalue()
-
 def main():
     if check_password():
-        # Your existing app code here
         create_streamlit_dashboard()
 
 if __name__ == "__main__":
-    main() 
+    main()
+
