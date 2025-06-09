@@ -215,39 +215,43 @@ def analyze_call_experience(df):
     }
 
 def analyze_wellbeing_impact(df):
+    """
+    Version corrigée avec filtrage minimal pour exclure seulement les non-répondants
+    """
+    
     # Trouver les colonnes avant/après
     before_col = find_closest_column(df, "AVANT d'appeler")
     after_col = find_closest_column(df, "APRÈS après l'appel")
     
-    # FILTRAGE CORRIGÉ : Exclure seulement les valeurs vraiment vides/nulles
-    # Garder toutes les réponses textuelles, même "Je ne sais pas dire comment je me sentais"
+    if not before_col or not after_col:
+        print("ERREUR: Colonnes avant/après non trouvées")
+        return {
+            'feeling_bad_before_pct': 0,
+            'overall_improvement_pct': 0,
+            'very_bad_pct': 0,
+            'very_bad_improvement_pct': 0,
+            'avg_improvement_magnitude': 0,
+            'improvement_levels': {1: 0, 2: 0, 3: 0},
+            'before_stats': pd.DataFrame(),
+            'after_stats': pd.DataFrame(),
+            'experience_stats': {},
+            'intention_stats': {}
+        }
+    
+    # FILTRAGE MINIMAL : Exclure seulement les vraies valeurs nulles
+    # Garder toutes les réponses textuelles, même vides
     valid_responses = df[
         df[before_col].notna() & 
-        df[after_col].notna() & 
-        (df[before_col].astype(str).str.strip() != '') & 
-        (df[after_col].astype(str).str.strip() != '') &
-        (df[before_col].astype(str) != 'nan') &
-        (df[after_col].astype(str) != 'nan')
+        df[after_col].notna()
     ]
     
     total_valid = len(valid_responses)
     
-    print(f"Debug - Total réponses avant filtrage: {len(df)}")
-    print(f"Debug - Total réponses valides après filtrage: {total_valid}")
+    print(f"Debug - Total réponses: {len(df)}")
+    print(f"Debug - Réponses valides: {total_valid}")
     print(f"Debug - Réponses exclues: {len(df) - total_valid}")
     
-    # Vérification des données avant/après
-    print("\nDébug - Distribution 'avant' après filtrage:")
-    before_debug = valid_responses[before_col].value_counts()
-    for state, count in before_debug.items():
-        print(f"  {state}: {count}")
-    
-    print("\nDébug - Distribution 'après' après filtrage:")
-    after_debug = valid_responses[after_col].value_counts()
-    for state, count in after_debug.items():
-        print(f"  {state}: {count}")
-    
-    # Mapping plus précis des états après l'appel
+    # Mapping des états après l'appel
     improvement_mapping = {
         "Ça allait beaucoup plus mal": {"improvement": 0, "magnitude": 0},
         "Ça allait un peu plus mal": {"improvement": 0, "magnitude": 0},
@@ -267,13 +271,13 @@ def analyze_wellbeing_impact(df):
             return improvement_mapping.get(after, {"improvement": 0, "magnitude": 0})
         return None
     
-    # 1. Pourcentage qui se sentent mal ou très mal avant (sur les réponses valides)
+    # 1. Pourcentage qui se sentent mal ou très mal avant
     feeling_bad_before = valid_responses[valid_responses[before_col].isin(
         ["Ça allait très mal", "Ça allait plutôt mal"]
     )]
     feeling_bad_pct = (len(feeling_bad_before) / total_valid) * 100
     
-    # 2. Analyse de l'amélioration (sur les réponses valides)
+    # 2. Analyse de l'amélioration
     def compare_states(before, after):
         if after == "Je ne sais pas dire comment je me sentais":
             return None
@@ -293,7 +297,7 @@ def analyze_wellbeing_impact(df):
     
     overall_improvement_pct = (improvements.sum() / len(improvements)) * 100 if len(improvements) > 0 else 0
     
-    # 3. Analyse spécifique des "très mal" (sur les réponses valides)
+    # 3. Analyse spécifique des "très mal"
     very_bad_before = valid_responses[valid_responses[before_col] == "Ça allait très mal"]
     very_bad_pct = (len(very_bad_before) / total_valid) * 100
     
@@ -329,24 +333,30 @@ def analyze_wellbeing_impact(df):
         avg_improvement = 0
         level_percentages = {1: 0, 2: 0, 3: 0}
     
-    # Créer les DataFrames pour les statistiques avant/après (BASÉS SUR LES RÉPONSES VALIDES)
-    before_counts = valid_responses[before_col].value_counts()
-    before_pct = (before_counts / total_valid * 100).round(1)
+    # Créer les DataFrames pour les statistiques avant/après
+    before_valid = valid_responses[before_col][valid_responses[before_col].str.strip() != ""]
+    before_counts = before_valid.value_counts()
+    before_pct = (before_counts / len(before_valid) * 100).round(1)
     before_df = pd.DataFrame({
         'État': before_counts.index,
         'Nombre': before_counts.values,
         'Pourcentage': before_pct.values
     })
 
-    after_counts = valid_responses[after_col].value_counts()
-    after_pct = (after_counts / total_valid * 100).round(1)
+    after_valid = valid_responses[after_col][valid_responses[after_col].str.strip() != ""]
+    after_counts = after_valid.value_counts()
+    after_pct = (after_counts / len(after_valid) * 100).round(1)
     after_df = pd.DataFrame({
         'État': after_counts.index,
         'Nombre': after_counts.values,
         'Pourcentage': after_pct.values
     })
     
-    # Ajouter l'analyse des questions sur le ressenti pendant l'appel
+    # Debug final
+    print(f"AVANT - 'Ça allait plutôt mal': {before_counts.get('Ça allait plutôt mal', 0)}")
+    print(f"AVANT - 'Ça allait très mal': {before_counts.get('Ça allait très mal', 0)}")
+    
+    # Analyse des questions sur le ressenti pendant l'appel
     experience_cols = {
         'À l\'aise': find_closest_column(df, "l'aise pour aborder"),
         'Compris(e)': find_closest_column(df, "Compris"),
@@ -357,12 +367,10 @@ def analyze_wellbeing_impact(df):
     experience_stats = {}
     for name, col in experience_cols.items():
         if col:
-            # Exclure seulement "Ne s'applique pas" et les vraies valeurs vides
+            # Filtrage minimal pour les questions d'expérience
             valid_exp_responses = df[
                 ~df[col].str.contains("ne s'applique pas", na=False, case=False) &
-                df[col].notna() &
-                (df[col].astype(str).str.strip() != '') &
-                (df[col].astype(str) != 'nan')
+                df[col].notna()
             ]
             yes_count = valid_exp_responses[col].str.contains('Oui', na=False, case=False).sum()
             no_count = valid_exp_responses[col].str.contains('Non', na=False, case=False).sum()
@@ -376,7 +384,7 @@ def analyze_wellbeing_impact(df):
                     'Pourcentage Non': (no_count / total_valid_exp) * 100
                 }
     
-    # Ajouter l'analyse des intentions futures
+    # Analyse des intentions futures
     intention_cols = {
         'Consulter des ressources': find_closest_column(df, "Consulter des ressources"),
         'Consulter un professionnel': find_closest_column(df, "professionnel de santé"),
@@ -386,12 +394,10 @@ def analyze_wellbeing_impact(df):
     intention_stats = {}
     for name, col in intention_cols.items():
         if col:
-            # Exclure seulement "Ne s'applique pas" et les vraies valeurs vides
+            # Filtrage minimal pour les intentions
             valid_int_responses = df[
                 ~df[col].str.contains("ne s'applique pas", na=False, case=False) &
-                df[col].notna() &
-                (df[col].astype(str).str.strip() != '') &
-                (df[col].astype(str) != 'nan')
+                df[col].notna()
             ]
             yes_count = valid_int_responses[col].str.contains('Oui', na=False, case=False).sum()
             no_count = valid_int_responses[col].str.contains('Non', na=False, case=False).sum()
@@ -417,7 +423,7 @@ def analyze_wellbeing_impact(df):
         'experience_stats': experience_stats,
         'intention_stats': intention_stats,
         'total_valid_responses': total_valid,
-        'total_original_responses': len(df)
+        'total_excluded_responses': len(df) - total_valid
     }
 
 print("Fonction analyze_wellbeing_impact corrigée !")
